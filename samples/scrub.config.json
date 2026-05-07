@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "rules": {
+    "disabled": ["MacAddress"],
+    "custom": [
+      {
+        "id": "ProjectCodename",
+        "type": "Organization",
+        "pattern": "(?i)\\bproject[-_ ]?(orion|atlas|nimbus)\\b"
+      }
+    ]
+  },
+  "dictionaries": {
+    "Organization": ["Acme Corp", "Initech"],
+    "Person": []
+  },
+  "allowList": ["AcmeOpenSource", "noreply@example.com"],
+  "ner": {
+    "thresholds": { "Person": 0.85, "Organization": 0.85, "Location": 0.80 }
+  }
+}

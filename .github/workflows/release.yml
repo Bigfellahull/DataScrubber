@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 1.0.0 or 1.0.0-rc.1).'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "value=${{ inputs.version }}" >>"$GITHUB_OUTPUT"
+          else
+            # Strip the leading "v" from the pushed tag.
+            echo "value=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release artifacts
+        # release.sh runs the full validation gate (build, unit tests,
+        # optional integration + 1 GB streaming tests, format check) and
+        # produces per-RID self-contained bundles plus a SHA-256 manifest.
+        # Integration tests stay skipped here because the NER model is not
+        # bundled in the repo; the unit suite + EnforceNoNetwork (DSP0001-
+        # DSP0004) still run.
+        run: scripts/release.sh "${{ steps.version.outputs.value }}"
+
+      - name: Upload artifacts to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrub-${{ steps.version.outputs.value }}
+          path: |
+            release-artifacts/scrub-*.tar.gz
+            release-artifacts/scrub-*.zip
+            release-artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: scrub ${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: |
+            release-artifacts/scrub-*.tar.gz
+            release-artifacts/scrub-*.zip
+            release-artifacts/SHA256SUMS.txt
+          fail_on_unmatched_files: true

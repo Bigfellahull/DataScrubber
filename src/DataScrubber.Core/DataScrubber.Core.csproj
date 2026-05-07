@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>DataScrubber</RootNamespace>
+    <AssemblyName>DataScrubber.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Microsoft.ML.OnnxRuntime ships the CPU build of the runtime as a managed
+      assembly plus native binaries; it does not pull in any HTTP client or
+      socket dependency, which preserves the no-network posture that D8
+      enforces at build time in M5.
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.20.1" />
+  </ItemGroup>
+
+</Project>

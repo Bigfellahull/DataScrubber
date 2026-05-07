@@ -1,0 +1,83 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# .NET build output
+bin/
+obj/
+[Bb]uild[Ll]og.*
+*.binlog
+
+# .NET publish and deployment output
+publish/
+*.publishsettings
+
+# release.sh / release.yml output
+release-artifacts/
+
+# User-installed NER model — see README.md "NER model" section. The
+# README stub stays tracked so users see the install instructions; the
+# model files (large, may have license restrictions) do not.
+models/*
+!models/README.md
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+*.nuget.props
+*.nuget.targets
+
+# Test results and coverage
+TestResults/
+coverage/
+coverage.cobertura.xml
+coverage.opencover.xml
+*.coverage
+*.coveragexml
+*.trx
+
+# Visual Studio / Rider / JetBrains
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+_ReSharper*/
+*.DotSettings.user
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+secrets.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.pid
+*.swp
+*.swo
+
+# Tooling caches
+.cache/
+.sonarqube/
+.dotnet/
+.store/
+node_modules/

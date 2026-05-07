@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # global.json pins SDK 10.0.100; setup-dotnet honours it.
+          global-json-file: global.json
+
+      - name: Show .NET info
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (Release) — runs EnforceNoNetwork
+        # The EnforceNoNetwork target (DSP0001-DSP0004) fires here.
+        run: dotnet build -c Release --no-restore
+
+      - name: Unit tests
+        # Integration tests are skipped because the NER model is not bundled
+        # in CI (see scripts/release.sh comments and README "NER model"
+        # section). Tag a release to exercise the full validation gate.
+        run: dotnet test --filter "Category!=Integration" -c Release --no-build
+
+      - name: Format check
+        run: dotnet format --verify-no-changes

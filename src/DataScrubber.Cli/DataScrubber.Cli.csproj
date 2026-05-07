@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>DataScrubber.Cli</RootNamespace>
+    <AssemblyName>scrub</AssemblyName>
+    <RollForward>LatestMajor</RollForward>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DataScrubber.Core\DataScrubber.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      System.CommandLine has not yet shipped a 2.0.0 stable on NuGet; 2.0.0-beta5
+      is the long-running pre-release that ships with .NET 8/9/10 dotnet-suggest
+      and is API-stable. Pinning it here is the documented exception to the
+      "latest stable" guidance; the spec's Spectre.Console.Cli fallback is not
+      needed because beta5 builds and runs cleanly on net10.0.
+    -->
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta5.25306.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

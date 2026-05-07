@@ -1,0 +1,203 @@
+<Project>
+
+  <!--
+    EnforceNoNetwork — privacy-posture build gate (M5 / D8).
+
+    Fails the build for the DataScrubber.Cli and DataScrubber.Core projects
+    if any of these forbidden assemblies are present in the project's
+    resolved reference graph or in the compiled output's metadata:
+      - System.Net.Http
+      - System.Net.Sockets
+      - System.Net.WebSockets
+      - System.Net.NameResolution
+
+    Test fixtures and sample/scratch projects are exempt: only the two
+    shipping assemblies enforce the rule.
+
+    Three checks are performed:
+
+    1. Filename-based package-graph scan (DSP0001/DSP0002) — runs after
+       ResolveAssemblyReferences and looks at NuGet-package-supplied
+       @(ReferencePath) and @(ReferenceCopyLocalPaths) items. Catches a
+       package that physically ships a forbidden BCL assembly file.
+       Framework runtime packages (Microsoft.NETCore.App, Microsoft.AspNetCore.App,
+       Microsoft.WindowsDesktop.App, runtime.*) and Microsoft.ML.OnnxRuntime
+       are exempt by design.
+
+    2. IL AssemblyRef scan against the compiled output (DSP0003) — runs
+       after Build via the inline ScanForbiddenAssemblyReferences task.
+       Inspects the AssemblyReference table of DataScrubber.Cli.dll /
+       DataScrubber.Core.dll. If our source calls into a forbidden BCL
+       type (e.g. `new HttpClient()`), the C# compiler emits an AssemblyRef
+       to System.Net.Http and this scan fires.
+
+    3. IL AssemblyRef scan against package reference assemblies (DSP0004) —
+       runs in the same target as check 1. For every NuGet-package-supplied
+       @(ReferencePath) item (after the framework / OnnxRuntime allow-list)
+       it inspects that package DLL's own AssemblyReferences. If a third-
+       party package's own assembly references System.Net.Http, the build
+       fails before we ever ship a binary that depends on it. This is the
+       check that catches AC7's "developer added a PackageReference whose
+       assembly uses HttpClient" case.
+  -->
+  <PropertyGroup>
+    <_EnforceNoNetworkApplies Condition="'$(MSBuildProjectName)' == 'DataScrubber.Cli' OR '$(MSBuildProjectName)' == 'DataScrubber.Core'">true</_EnforceNoNetworkApplies>
+    <_EnforceNoNetworkApplies Condition="'$(_EnforceNoNetworkApplies)' == ''">false</_EnforceNoNetworkApplies>
+  </PropertyGroup>
+
+  <UsingTask TaskName="ScanForbiddenAssemblyReferences"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <AssemblyPaths ParameterType="System.String[]" Required="true" />
+      <ForbiddenNamesSemicolonList ParameterType="System.String" Required="true" />
+      <Findings ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.Collections.Generic" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Reflection" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+        var forbidden = new HashSet<string>(ForbiddenNamesSemicolonList.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+        var findings = new List<string>();
+
+        // Assembly.LoadFrom + GetReferencedAssemblies is metadata-only:
+        // GetReferencedAssemblies enumerates the AssemblyReference table
+        // without actually resolving each reference. System.Reflection
+        // types are always available inside RoslynCodeTaskFactory, so this
+        // avoids needing an external package reference for the scan task.
+        foreach (var path in AssemblyPaths)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var asm = Assembly.LoadFrom(path);
+                var matches = new SortedSet<string>(StringComparer.Ordinal);
+                foreach (var refAsm in asm.GetReferencedAssemblies())
+                {
+                    if (refAsm.Name != null && forbidden.Contains(refAsm.Name))
+                    {
+                        matches.Add(refAsm.Name);
+                    }
+                }
+
+                if (matches.Count > 0)
+                {
+                    findings.Add(Path.GetFileName(path) + " -> " + string.Join(",", matches));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning("EnforceNoNetwork: failed to scan '{0}': {1}", path, ex.Message);
+            }
+        }
+
+        Findings = string.Join("; ", findings);
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="EnforceNoNetwork"
+          AfterTargets="ResolveAssemblyReferences"
+          Condition="'$(_EnforceNoNetworkApplies)' == 'true'">
+
+    <ItemGroup>
+      <_NoNetworkForbiddenName Include="System.Net.Http" />
+      <_NoNetworkForbiddenName Include="System.Net.Sockets" />
+      <_NoNetworkForbiddenName Include="System.Net.WebSockets" />
+      <_NoNetworkForbiddenName Include="System.Net.NameResolution" />
+    </ItemGroup>
+
+    <!--
+      Items whose package id starts with one of these prefixes are part of
+      the .NET runtime / Microsoft.ML.OnnxRuntime native dependency closure
+      and are exempt by design. Any other package that ships an assembly
+      named like a forbidden BCL type triggers the gate. The prefix check
+      is needed for self-contained publish, where the entire framework
+      runtime pack flows through @(ReferenceCopyLocalPaths).
+    -->
+    <ItemGroup>
+      <_NoNetworkOffendingReference Include="@(ReferencePath)"
+          Condition=" '%(ReferencePath.NuGetSourceType)' == 'Package'
+                  AND '%(ReferencePath.NuGetPackageId)' != 'Microsoft.ML.OnnxRuntime'
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('Microsoft.NETCore.App'))
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('Microsoft.AspNetCore.App'))
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('Microsoft.WindowsDesktop.App'))
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('runtime.'))
+                  AND ('%(ReferencePath.FileName)' == 'System.Net.Http'
+                    OR '%(ReferencePath.FileName)' == 'System.Net.Sockets'
+                    OR '%(ReferencePath.FileName)' == 'System.Net.WebSockets'
+                    OR '%(ReferencePath.FileName)' == 'System.Net.NameResolution')" />
+
+      <_NoNetworkOffendingRuntimeItem Include="@(ReferenceCopyLocalPaths)"
+          Condition=" '%(ReferenceCopyLocalPaths.NuGetPackageId)' != 'Microsoft.ML.OnnxRuntime'
+                  AND !$([System.String]::Copy('%(ReferenceCopyLocalPaths.NuGetPackageId)').StartsWith('Microsoft.NETCore.App'))
+                  AND !$([System.String]::Copy('%(ReferenceCopyLocalPaths.NuGetPackageId)').StartsWith('Microsoft.AspNetCore.App'))
+                  AND !$([System.String]::Copy('%(ReferenceCopyLocalPaths.NuGetPackageId)').StartsWith('Microsoft.WindowsDesktop.App'))
+                  AND !$([System.String]::Copy('%(ReferenceCopyLocalPaths.NuGetPackageId)').StartsWith('runtime.'))
+                  AND ('%(ReferenceCopyLocalPaths.FileName)' == 'System.Net.Http'
+                    OR '%(ReferenceCopyLocalPaths.FileName)' == 'System.Net.Sockets'
+                    OR '%(ReferenceCopyLocalPaths.FileName)' == 'System.Net.WebSockets'
+                    OR '%(ReferenceCopyLocalPaths.FileName)' == 'System.Net.NameResolution')" />
+    </ItemGroup>
+
+    <Error Condition="'@(_NoNetworkOffendingReference)' != ''"
+           Code="DSP0001"
+           Text="EnforceNoNetwork: project '$(MSBuildProjectName)' references forbidden assembly '@(_NoNetworkOffendingReference->'%(FileName)', ', ')' from package '@(_NoNetworkOffendingReference->'%(NuGetPackageId)', ', ')'. The DataScrubber privacy posture forbids networking-capable references in shipped assemblies." />
+
+    <Error Condition="'@(_NoNetworkOffendingRuntimeItem)' != ''"
+           Code="DSP0002"
+           Text="EnforceNoNetwork: project '$(MSBuildProjectName)' would deploy forbidden assembly '@(_NoNetworkOffendingRuntimeItem->'%(FileName)', ', ')' from package '@(_NoNetworkOffendingRuntimeItem->'%(NuGetPackageId)', ', ')'. The DataScrubber privacy posture forbids networking-capable references in shipped assemblies." />
+
+    <!--
+      DSP0004: package-assembly IL scan. Walk each NuGet-package-supplied
+      ReferencePath item (modulo the framework / OnnxRuntime allow-list)
+      and inspect its AssemblyReference table. Catches a third-party
+      package whose own DLL pulls in System.Net.* even when the package
+      doesn't physically ship a forbidden assembly file.
+    -->
+    <ItemGroup>
+      <_NoNetworkPackageRefScanCandidate Include="@(ReferencePath)"
+          Condition=" '%(ReferencePath.NuGetSourceType)' == 'Package'
+                  AND '%(ReferencePath.NuGetPackageId)' != 'Microsoft.ML.OnnxRuntime'
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('Microsoft.NETCore.App'))
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('Microsoft.AspNetCore.App'))
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('Microsoft.WindowsDesktop.App'))
+                  AND !$([System.String]::Copy('%(ReferencePath.NuGetPackageId)').StartsWith('runtime.'))" />
+    </ItemGroup>
+
+    <ScanForbiddenAssemblyReferences AssemblyPaths="@(_NoNetworkPackageRefScanCandidate)"
+                                     ForbiddenNamesSemicolonList="System.Net.Http;System.Net.Sockets;System.Net.WebSockets;System.Net.NameResolution"
+                                     Condition="'@(_NoNetworkPackageRefScanCandidate)' != ''">
+      <Output PropertyName="_NoNetworkPackageRefFindings" TaskParameter="Findings" />
+    </ScanForbiddenAssemblyReferences>
+
+    <Error Condition="'$(_NoNetworkPackageRefFindings)' != ''"
+           Code="DSP0004"
+           Text="EnforceNoNetwork: project '$(MSBuildProjectName)' transitively references one or more NuGet-package assemblies that themselves have AssemblyRef to forbidden BCL networking assemblies: $(_NoNetworkPackageRefFindings). The DataScrubber privacy posture forbids networking-capable references in shipped assemblies (D8)." />
+
+  </Target>
+
+  <Target Name="EnforceNoNetworkOnAssembly"
+          AfterTargets="Build"
+          Condition="'$(_EnforceNoNetworkApplies)' == 'true' AND Exists('$(TargetPath)')">
+
+    <ScanForbiddenAssemblyReferences AssemblyPaths="$(TargetPath)"
+                                     ForbiddenNamesSemicolonList="System.Net.Http;System.Net.Sockets;System.Net.WebSockets;System.Net.NameResolution">
+      <Output PropertyName="_NoNetworkAssemblyRefFindings" TaskParameter="Findings" />
+    </ScanForbiddenAssemblyReferences>
+
+    <Error Condition="'$(_NoNetworkAssemblyRefFindings)' != ''"
+           Code="DSP0003"
+           Text="EnforceNoNetwork: project '$(MSBuildProjectName)' compiled output has AssemblyRef to forbidden BCL assembly: $(_NoNetworkAssemblyRefFindings). Direct usage of System.Net.* types is forbidden by the DataScrubber privacy posture (D8)." />
+
+  </Target>
+
+</Project>
